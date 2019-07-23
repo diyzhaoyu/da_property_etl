@@ -1,0 +1,77 @@
+--插入小区map表
+insert into property.xq_name_map
+with base_1 as(
+select city_name,xq_name
+,replace(regexp_replace(xq_name,'一期|二期|三期|四期|五期|六期|七期|八期|九期|十期|十一期|十二期',''),'()','')as xq_name_1
+from property.ods_fangtianxia_old
+)
+,base_2 as (
+select city_name,xq_name
+,replace(regexp_replace(xq_name_1,'一区|二区|三区|四区|五区|六区|七区|八区|九区|十区|十一区|十二区|十三区|十四区|十五区|十六区|东区|西区|南区|北区',''),'()','') as xq_name_2
+from base_1
+)
+,base_3 as (
+select city_name,xq_name
+,replace(regexp_replace(upper(xq_name_2),'[0-9A-Z]+区|[0-9A-Z]+期|[0-9A-Z]+栋|[0-9A-Z]+幢',''),'()','') as std_xq_name
+from base_2
+)
+,base_4 as(
+select city_name,xq_name
+,replace(regexp_replace(xq_name,'一期|二期|三期|四期|五期|六期|七期|八期|九期|十期|十一期|十二期',''),'()','')as xq_name_1
+from property.ods_fangtianxia_new
+)
+,base_5 as (
+select city_name,xq_name
+,replace(regexp_replace(xq_name_1,'一区|二区|三区|四区|五区|六区|七区|八区|九区|十区|十一区|十二区|十三区|十四区|十五区|十六区|东区|西区|南区|北区',''),'()','') as xq_name_2
+from base_4
+)
+,base_6 as (
+select city_name,xq_name
+,replace(regexp_replace(upper(xq_name_2),'[0-9A-Z]+区|[0-9A-Z]+期|[0-9A-Z]+栋|[0-9A-Z]+幢',''),'()','') as std_xq_name
+from base_5
+)
+,temp_1 as(
+select city_name,xq_name
+,replace(regexp_replace(xq_name,'一期|二期|三期|四期|五期|六期|七期|八期|九期|十期|十一期|十二期',''),'()','')as xq_name_1
+from property.ods_lianjia_old
+)
+,temp_2 as (
+select city_name,xq_name
+,replace(regexp_replace(xq_name_1,'一区|二区|三区|四区|五区|六区|七区|八区|九区|十区|十一区|十二区|十三区|十四区|十五区|十六区|东区|西区|南区|北区',''),'()','') as xq_name_2
+from temp_1
+)
+,temp_3 as (
+select city_name,xq_name
+,replace(regexp_replace(upper(xq_name_2),'[0-9A-Z]+区|[0-9A-Z]+期|[0-9A-Z]+栋|[0-9A-Z]+幢',''),'()','') as std_xq_name
+from temp_2
+)
+,temp_4 as(
+select city_name,house_name as xq_name
+,replace(regexp_replace(house_name,'一期|二期|三期|四期|五期|六期|七期|八期|九期|十期|十一期|十二期',''),'()','')as xq_name_1
+from property.ods_lianjia_new
+)
+,temp_5 as (
+select city_name,xq_name
+,replace(regexp_replace(xq_name_1,'一区|二区|三区|四区|五区|六区|七区|八区|九区|十区|十一区|十二区|十三区|十四区|十五区|十六区|东区|西区|南区|北区',''),'()','') as xq_name_2
+from temp_4
+)
+,temp_6 as (
+select city_name,xq_name
+,replace(regexp_replace(upper(xq_name_2),'[0-9A-Z]+区|[0-9A-Z]+期|[0-9A-Z]+栋|[0-9A-Z]+幢',''),'()','') as std_xq_name
+from temp_5
+)
+,xq_name as (
+select distinct *
+from base_3
+union 
+select distinct *
+from base_6
+union 
+select distinct *
+from temp_3
+union
+select distinct *
+from temp_6
+)
+select distinct on (city_name,xq_name) *
+from xq_name;
