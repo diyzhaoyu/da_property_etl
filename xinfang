@@ -1,0 +1,349 @@
+insert into property.dw_new_eft
+--房天下清洗 
+with fangtianxia_1 as(
+select distinct on(city_name,xq_name)
+nullif(nullif(nullif(city_name,''),'暂无资料'),'暂无')  as city_name
+, nullif(nullif(nullif(house_type,''),'暂无资料'),'暂无') as house_type
+, nullif(nullif(nullif(xq_area,''),'暂无资料'),'暂无') as area_name
+, substring(building_area from '([0-9]*\.{0,1}[0-9]+)平')::float4  as building_area
+, nullif(nullif(nullif(xq_name,''),'暂无资料'),'暂无') as xq_name
+,nullif(nullif(nullif(service_type,''),'暂无资料'),'暂无') as xq_category
+,substring(service_fee from '([0-9]*\.{0,1}[0-9]+)元')::float4 as service_fee
+,nullif(nullif(nullif(developer,''),'暂无资料'),'暂无') as developer
+,nullif(nullif(nullif(service_company,''),'暂无资料'),'暂无') as service_company
+,nullif(nullif(nullif(address,''),'暂无资料'),'暂无') as address
+--交房时间清洗
+,case when deliver_time like '%年%月%'
+then split_part(substring(deliver_time from '([0-9]+年[0-9])'),'年',1)
+when deliver_time ~ '([0-9]{4}\-[0-9]{1,2})'
+then split_part((substring(deliver_time from '([0-9]{4}\-[0-9]{1,2})')),'-',1)
+end as year
+,case when deliver_time like '%年%月%'then split_part(substring(deliver_time from '([0-9]+年[0-9])'),'年',2)
+when deliver_time ~ '([0-9]{4}\-[0-9]{1,2})'
+then split_part((substring(deliver_time from '([0-9]{4}\-[0-9]{1,2})')),'-',2)
+end as month
+from property.ods_fangtianxia_new
+where quarter = '2019Q2'
+order by city_name,xq_name,service_company desc,building_area asc,service_fee asc
+)
+--更换标准小区名称
+,fangtianxia_2 as(
+select  a.city_name,a.area_name,c.std_xq_name,a.xq_name,
+a.building_area,a.xq_category,a.service_fee,a.developer,a.service_company,a.address
+,case when  month in ('1','2','3','4','5','6','7','8','9')  then year||'0'||month 
+else year||month end as delivery_time
+,case when a.service_company similar to '%(彩生活|花样年|万象美|万达|万象|中海|碧桂园|绿城|四季生活|雅生活|雅居乐|绿地|万科|朴邻|龙湖)%' then 1 else 0 end as priority
+from fangtianxia_1 a
+left join property.xq_name_map c
+on a.city_name =c.city_name and  a.xq_name =c.xq_name
+)
+--房天下去重复 
+,fangtianxia_3 as(
+select distinct on(d.city_name,d.std_xq_name)
+d.*,e.area_name,e.xq_category,e.developer,e.service_company,e.address,e.delivery_time
+from (
+		select city_name,std_xq_name,sum(building_area) as building_area ,avg(service_fee) as service_fee
+		from fangtianxia_2
+		group by city_name,std_xq_name
+	  ) d
+left join (
+			select distinct on (city_name,std_xq_name)*
+			from fangtianxia_2
+			order by city_name,std_xq_name,priority desc,service_company,developer
+		  ) e
+on d.city_name= e.city_name and d.std_xq_name=e.std_xq_name
+)
+--房天下物业价格合并准备
+,fangtianxia_4 as(
+select  city_name,std_xq_name,COALESCE(service_fee, 0) as service_fee,0 as property_cost_low,0 as property_cost_up
+,building_area as building_area_fangtianxia,0 as building_area_lianjia
+from fangtianxia_3
+)
+--链家清洗数据 
+,lianjia_1 as (
+select distinct on(city_name,house_name)
+nullif(nullif(nullif(city_name,''),'暂无信息'),'暂无')  as city_name
+,nullif(nullif(nullif(house_name,''),'暂无信息'),'暂无')  as xq_name
+,nullif(nullif(nullif(area_name,''),'暂无信息'),'暂无')  as area_name
+,substring(replace(built_up_area,',','') from '([0-9]*\.{0,1}[0-9]+)㎡')::float4  as building_area
+,case when  property_fee  like '%~%' then substring(property_fee from '([0-9]*\.{0,1}[0-9]+)~')::float4
+when property_fee not like '%~%'then substring(property_fee from '([0-9]*\.{0,1}[0-9]+)元')::float4
+end as property_cost_low
+,substring(property_fee from '([0-9]*\.{0,1}[0-9]+)元')::float4 as property_cost_up
+,nullif(nullif(nullif(property_type,''),'暂无信息'),'暂无') as xq_category
+,nullif(nullif(nullif(real_estate_address,''),'暂无信息'),'暂无')  as address
+,nullif(nullif(nullif(developers,''),'暂无信息'),'暂无')  as developer
+,nullif(nullif(nullif(property_company,''),'暂无信息'),'暂无')  as property_company
+--交房时间清洗
+,case when  split_part(substring(fq_event from '([0-9]+\-[0-9]+)\-?[0-9]*\;交房'),'-',2) in ('1','2','3','4','5','6','7','8','9') 
+then split_part(substring(fq_event from '([0-9]+\-[0-9]+)\-?[0-9]*\;交房'),'-',1)||'0'|| split_part(substring(fq_event from '([0-9]+\-[0-9]+)\-?[0-9]*\;交房'),'-',2)
+else split_part(substring(fq_event from '([0-9]+\-[0-9]+)\-?[0-9]*\;交房'),'-',1)||split_part(substring(fq_event from '([0-9]+\-[0-9]+)\-?[0-9]*\;交房'),'-',2) 
+end as delivery_time
+from property.ods_lianjia_new
+where quarter = '2019Q2'
+order by city_name,house_name,property_company desc,property_fee asc
+)
+--更换标准小区名称
+,lianjia_2 as(
+select distinct on(a.city_name,b.std_xq_name)
+a.city_name,a.area_name,a.xq_name,b.std_xq_name,a.xq_category,a.property_cost_low,a.property_cost_up,a.building_area
+,a.address,a.developer,a.property_company,a.delivery_time
+,case when a.property_company similar to '%(彩生活|花样年|万象美|万达|万象|中海|碧桂园|绿城|四季生活|雅生活|雅居乐|绿地|万科|朴邻|龙湖)%' then 1 else 0 end as priority
+from lianjia_1 a
+left join property.xq_name_map b
+on a.city_name =b.city_name and  a.xq_name =b.xq_name
+)
+--去重复 
+,lianjia_3 as(
+select distinct on(d.city_name,d.std_xq_name)
+d.*,e.xq_category,e.area_name,e.developer,e.property_company,e.address,e.delivery_time
+from (
+		select city_name,std_xq_name
+			,sum(building_area) as building_area,avg(property_cost_low) as property_cost_low ,avg(property_cost_up) as property_cost_up
+		from lianjia_2
+		group by city_name,std_xq_name
+	  ) d
+left join (
+			select distinct on (city_name,std_xq_name)*
+			from lianjia_2
+			order by city_name,std_xq_name,priority desc,property_company,developer
+		  )e
+on d.city_name= e.city_name and d.std_xq_name=e.std_xq_name
+)
+--链家物业价格合并准备
+,lianjia_4 as(
+select  city_name,std_xq_name,0 as service_fee,COALESCE(property_cost_low, 0) as property_cost_low,COALESCE(property_cost_up, 0) as property_cost_up
+,0 as building_area_fangtianxia,COALESCE(building_area, 0) as building_area_lianjia
+from lianjia_3
+)
+--物业价格合并
+,base as(
+select *
+from fangtianxia_4
+union all
+select *
+from lianjia_4
+)
+,tem as (
+select city_name,std_xq_name,sum(service_fee) as service_fee ,sum(property_cost_low)as property_cost_low,sum(property_cost_up)as property_cost_up
+,sum(building_area_fangtianxia)as building_area_fangtianxia,sum(building_area_lianjia)as building_area_lianjia
+from base
+group by city_name,std_xq_name
+)
+--汇总
+,aa as(
+select distinct on(city_name,std_xq_name)
+a.city_name,coalesce(c.area_name,b.area_name) as area_name
+,a.std_xq_name
+,nullif(a.service_fee,0)as service_fee,nullif(a.property_cost_low,0) as property_cost_low,nullif(a.property_cost_up,0) as property_cost_up
+,nullif(a.building_area_fangtianxia,0) as building_area_fangtianxia,nullif(a.building_area_lianjia,0) as building_area_lianjia
+,coalesce(c.xq_category,b.xq_category) as xq_category
+,coalesce(c.property_company,b.service_company) as property_company
+,coalesce(c.developer,b.developer) as developer
+,coalesce(c.address,b.address) as address
+,coalesce(c.delivery_time,b.delivery_time) as delivery_time
+from tem a
+left join fangtianxia_3 b
+on a.city_name=b.city_name and a.std_xq_name=b.std_xq_name
+left join lianjia_3 c
+on a.city_name=c.city_name and a.std_xq_name=c.std_xq_name
+)
+--有效行数
+select distinct on(city_name,std_xq_name)
+n.geo_area,n.province as province_name,city_name,area_name,std_xq_name,property_cost_low,property_cost_up,service_fee
+,building_area_lianjia,building_area_fangtianxia,xq_category,property_company,developer,address,delivery_time,'2018Q2' as quarter
+from aa m
+inner join property.geo_province_city_map n
+on m.city_name =n.city
+where ((property_cost_low is not null and property_cost_up is not null) or service_fee is not null) and 
+(building_area_fangtianxia is not null or building_area_lianjia is not null);
+
+
+
+
+
+insert into property.listed_company_new
+---------------------------------1.关键词匹配
+with aa as(
+select distinct on(city_name,std_xq_name)
+a.*,b.listed_company,b.rate
+from property.dw_new_eft a
+left join  property.key_word_map b
+on   a.property_company  like '%'||b.keyword||'%' and a.city_name=b.city
+where a.quarter = '2019Q2' and b.rate is not null
+)
+--------------------------------2.直接匹配
+,bb as(
+select distinct on(city_name,std_xq_name)
+c.*,d.cat_1 as listed_company,d.rate
+from property.dw_new_eft c
+left join property.company_parent_child_sum d
+on c.property_company = d.cat_2
+where c.quarter = '2019Q2' and d.rate is not null
+)
+------------------------------3.上市公司名字匹配
+,cc as(
+select distinct on(city_name,std_xq_name)
+m.*,1::float4 as rate
+from  (
+		select c.*,
+		case
+		when property_company like '%'||'彩生活'||'%'	or property_company like '%'||'花样年'||'%'	or property_company like  '%'||'万象美'||'%'	 
+		or property_company like '%'||'万达'||'%'	or property_company like '%'||'万象'||'%'then '彩生活'
+		when property_company like '%'||'中海'||'%'	then '中海物业'
+		when property_company like '%'||'碧桂园'||'%'	then '碧桂园服务'
+		when property_company like '%'||'绿城'||'%' or property_company like '%'||'四季生活'||'%' then '绿城服务'		
+		when property_company like '%'||'雅生活'||'%'	or property_company like  '%'||'雅居乐'||'%'	or property_company like  '%'||'绿地'||'%'	then '雅生活'
+		when property_company like '%'||'万科'||'%' or property_company like '%'||'朴邻'||'%' then '万科物业'	
+		when property_company like '%'||'龙湖'||'%'  then '龙湖物业'	
+		end as listed_company
+		from property.dw_new_eft c
+	  )m
+where m.quarter = '2019Q2' and listed_company is not null
+)
+--合并
+,sum_1 as (
+select*
+from aa
+union
+select*
+from bb
+union 
+select*
+from cc
+)
+,sum as (
+select distinct on(city_name,std_xq_name)*
+from sum_1
+)
+--计算平均物业费
+,avg as(
+select 
+u.city_name,u.std_xq_name,MAX(m) as max_num,Min(m) as min_num,(MAX(m)+Min(m))/2::float4 as avg_num
+from (  
+    select a.city_name,a.std_xq_name,property_cost_low as m from sum  a
+        union all   
+    select a.city_name,a.std_xq_name,property_cost_up as m from sum  a 
+        union all   
+    select a.city_name,a.std_xq_name,a.service_fee as m from sum  a 
+	) u 
+group by u.city_name,u.std_xq_name
+)
+--,end as (
+select distinct on(a.city_name,a.std_xq_name)
+geo_area,province_name,a.city_name,a.area_name,a.std_xq_name
+,a.property_cost_low,a.property_cost_up,a.service_fee,a.building_area_lianjia,a.building_area_fangtianxia
+,c.avg_num as avg_service_fee,coalesce(building_area_lianjia,building_area_fangtianxia) as building_area
+,a.xq_category,a.property_company,a.developer,a.address,a.delivery_time,a.listed_company,a.rate
+,case when (developer like '%'||'彩生活'||'%'	or developer like '%'||'花样年'||'%'	or developer like  '%'||'万象美'||'%'	 
+or developer like '%'||'万达'||'%'	or developer like '%'||'万象'||'%') and listed_company='彩生活' then '1'
+when (developer like '%'||'中海'||'%') and listed_company='中海物业' then '1'
+when (developer like '%'||'碧桂园'||'%') and listed_company='碧桂园服务' then '1'
+when (developer like '%'||'绿城'||'%' or developer like '%'||'四季生活'||'%') and listed_company='绿城服务' then '1'
+when (developer like '%'||'雅生活'||'%'	or developer like  '%'||'雅居乐'||'%'	or developer like  '%'||'绿地'||'%') and listed_company='雅生活' then '1'
+when (developer like '%'||'万科'||'%' or developer like '%'||'朴邻'||'%') and listed_company='万科物业' then '1'
+when (developer like '%'||'龙湖'||'%') and listed_company='龙湖物业' then '1'
+else '0' end as is_dev_pro,'2019Q2' as quarter
+from sum a
+left join avg c
+on a.city_name =c.city_name and a.std_xq_name =c.std_xq_name
+where delivery_time >'201906';
+
+
+
+
+
+
+insert into property.listed_company_new
+---------------------------------1.关键词匹配
+with aa as(
+select distinct on(city_name,std_xq_name)
+a.*,b.listed_company,b.rate
+from property.dw_new_eft a
+left join  property.key_word_map b
+on   a.property_company  like '%'||b.keyword||'%' and a.city_name=b.city
+where a.quarter = '2019Q2' and b.rate is not null
+)
+--------------------------------2.直接匹配
+,bb as(
+select distinct on(city_name,std_xq_name)
+c.*,d.cat_1 as listed_company,d.rate
+from property.dw_new_eft c
+left join property.company_parent_child_sum d
+on c.property_company = d.cat_2
+where c.quarter = '2019Q2' and d.rate is not null
+)
+------------------------------3.上市公司名字匹配
+,cc as(
+select distinct on(city_name,std_xq_name)
+m.*,1::float4 as rate
+from  (
+		select c.*,
+		case
+		when property_company like '%'||'彩生活'||'%'	or property_company like '%'||'花样年'||'%'	or property_company like  '%'||'万象美'||'%'	 
+		or property_company like '%'||'万达'||'%'	or property_company like '%'||'万象'||'%'then '彩生活'
+		when property_company like '%'||'中海'||'%'	then '中海物业'
+		when property_company like '%'||'碧桂园'||'%'	then '碧桂园服务'
+		when property_company like '%'||'绿城'||'%' or property_company like '%'||'四季生活'||'%' then '绿城服务'		
+		when property_company like '%'||'雅生活'||'%'	or property_company like  '%'||'雅居乐'||'%'	or property_company like  '%'||'绿地'||'%'	then '雅生活'
+		when property_company like '%'||'万科'||'%' or property_company like '%'||'朴邻'||'%' then '万科物业'	
+		when property_company like '%'||'龙湖'||'%'  then '龙湖物业'	
+		end as listed_company
+		from property.dw_new_eft c
+	  )m
+where m.quarter = '2019Q2' and listed_company is not null
+)
+--合并
+,sum_1 as (
+select*
+from aa
+union
+select*
+from bb
+union 
+select*
+from cc
+)
+,sum as (
+select distinct on(city_name,std_xq_name)*
+from sum_1
+)
+--计算平均物业费
+,avg as(
+select 
+u.city_name,u.std_xq_name,MAX(m) as max_num,Min(m) as min_num,(MAX(m)+Min(m))/2::float4 as avg_num
+from (  
+    select a.city_name,a.std_xq_name,property_cost_low as m from sum  a
+        union all   
+    select a.city_name,a.std_xq_name,property_cost_up as m from sum  a 
+        union all   
+    select a.city_name,a.std_xq_name,a.service_fee as m from sum  a 
+	) u 
+group by u.city_name,u.std_xq_name
+)
+--,end as (
+select distinct on(a.city_name,a.std_xq_name)
+geo_area,province_name,a.city_name,a.area_name,a.std_xq_name
+,a.property_cost_low,a.property_cost_up,a.service_fee,a.building_area_lianjia,a.building_area_fangtianxia
+,c.avg_num as avg_service_fee,coalesce(building_area_lianjia,building_area_fangtianxia) as building_area
+,a.xq_category,a.property_company,a.developer,a.address,a.delivery_time,a.listed_company,a.rate
+,case when (developer like '%'||'彩生活'||'%'	or developer like '%'||'花样年'||'%'	or developer like  '%'||'万象美'||'%'	 
+or developer like '%'||'万达'||'%'	or developer like '%'||'万象'||'%') and listed_company='彩生活' then '1'
+when (developer like '%'||'中海'||'%') and listed_company='中海物业' then '1'
+when (developer like '%'||'碧桂园'||'%') and listed_company='碧桂园服务' then '1'
+when (developer like '%'||'绿城'||'%' or developer like '%'||'四季生活'||'%') and listed_company='绿城服务' then '1'
+when (developer like '%'||'雅生活'||'%'	or developer like  '%'||'雅居乐'||'%'	or developer like  '%'||'绿地'||'%') and listed_company='雅生活' then '1'
+when (developer like '%'||'万科'||'%' or developer like '%'||'朴邻'||'%') and listed_company='万科物业' then '1'
+when (developer like '%'||'龙湖'||'%') and listed_company='龙湖物业' then '1'
+else '0' end as is_dev_pro,'2019Q2' as quarter
+from sum a
+left join avg c
+on a.city_name =c.city_name and a.std_xq_name =c.std_xq_name
+where delivery_time >'201906';
+
+
+
+
+
+
+
